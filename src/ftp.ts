@@ -1,4 +1,4 @@
-import * as PromiseFtp from "promise-ftp";
+import * as FTPS from "ftps";
 import * as fs from 'fs';
 import {log} from "./log";
 
@@ -15,40 +15,57 @@ interface FtpParameters {
 
 export class FtpSupport {
 
+  ftpsClient(host: string, username: string, password: string): FTPS {
+    // TODO: this possibly breaks if the certificate is not available. Haven' tested it.
+    return new FTPS({
+      host: host,
+      username: username,
+      password: password,
+      requiresPassword: false,
+      additionalLftpCommands: 'set ssl:ca-file "' + process.env.SSL_CERT_FILE + '"',
+    });
+  }
+
   ftpUploadDummyFile(fileLocation: string, fileName: string): Promise<void> {
     const {user, password, host, remotePath, localPath} = this.extracted(fileLocation, false);
     fs.writeFileSync(localPath + "/" + fileName, "Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.");
-    const ftp = new PromiseFtp();
-    return ftp.connect({host, user, password})
-      .then(() => ftp.put(localPath + "/" + fileName, remotePath + "/" + fileName))
-      .then(() => {
-        ftp.end(); // if we return this Promise, (at least locally) it will never resolve/reject
+    return this.ftpsClient(host, user, password).put(localPath + "/" + fileName, remotePath + "/" + fileName).exec((error, result) => {
+      return new Promise((resolve, reject) => {
+        if (error) {
+          reject()
+        } else {
+          resolve()
+        }
       });
+    });
   }
 
   ftpDownload(fileLocation: string): Promise<string> {
-    const {user, password, host, localPath, remotePath, fileName} = this.extracted(fileLocation, true);
-    const ftp = new PromiseFtp();
-    return ftp.connect({host, user, password})
-      .then(() => ftp.get(remotePath + "/" + fileName))
-      .then((stream) => {
-        return new Promise((resolve, reject) => {
-          stream.once('close', resolve);
-          stream.once('error', reject);
-          stream.pipe(fs.createWriteStream(localPath + "/" + fileName));
-        });
-      })
-      .then(() => {
-        ftp.end();
-      })
-      .then(() => localPath + "/" + fileName);
+    const {user, password, host, localPath, fileName} = this.extracted(fileLocation, true);
+    const client = this.ftpsClient(host, user, password);
+    return client.get(fileName, localPath + "/" + fileName).exec((error, result) => {
+      return new Promise((resolve, reject) => {
+        if (error) {
+          reject()
+        } else {
+          resolve(localPath + "/" + fileName)
+        }
+      });
+    });
   }
 
   private extracted(fileLocation: string, withFilename: boolean): FtpParameters {
     let fileLocTmp = fileLocation.substr("ftp://".length);
-    const user = fileLocTmp.substr(0, fileLocTmp.indexOf(':'));
-    fileLocTmp = fileLocTmp.substr(fileLocTmp.indexOf(':') + 1);
-    const password = fileLocTmp.substr(0, fileLocTmp.indexOf('@'));
+    const credentials = fileLocTmp.substr(0, fileLocTmp.indexOf('@'));
+    let user;
+    let password;
+    if (credentials.indexOf(':') > -1) {
+      user = credentials.substr(0, credentials.indexOf(':'));
+      password = credentials.substr(credentials.indexOf(':') + 1);
+    } else {
+      user = credentials;
+      password = ''
+    }
     fileLocTmp = fileLocTmp.substr(fileLocTmp.indexOf('@') + 1);
     let fileName = '';
     let remotePath = '';
